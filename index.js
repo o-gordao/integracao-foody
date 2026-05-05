@@ -6,12 +6,18 @@ app.use(express.json());
 
 // ========== CONFIGURAÇÕES ==========
 const FOODY_BASE_URL = 'https://app.foodydelivery.com/opendelivery/api';
+const FOODY_API_URL = 'https://app.foodydelivery.com/rest/1.2';
 const FOODY_CLIENT_ID = '55f235c3cb394f40a187d37c18fe3541';
 const FOODY_CLIENT_SECRET = 'c8bbe437e68b4516b0e0d031bb7fc882';
+const FOODY_API_TOKEN = '94b8482d28c9443f83aebbf3bfb297ff'; // token API v1.2
 
 const CARDAPIO_BASE_URL = 'https://integracao.cardapioweb.com/api/open_delivery';
 const CARDAPIO_CLIENT_ID = 'ec2b9f5d-3313-49a7-ac0d-d688f49ab684';
 const CARDAPIO_CLIENT_SECRET = '4a95ae0b-5bdb-40c2-bdb3-101bd22fe98b';
+
+// ========== MAPA DE PEDIDOS ==========
+// Guarda: foodyDisplayId (ex: "11348") → cardapioOrderId (ex: "214564677")
+const orderMap = {};
 
 // Cache de tokens
 let foodyToken = null;
@@ -46,13 +52,21 @@ async function getCardapioToken() {
   return cardapioToken;
 }
 
+// ========== BUSCA PEDIDO NO FOODY PELA API v1.2 ==========
+async function getFoodyOrder(uid) {
+  const res = await axios.get(`${FOODY_API_URL}/orders/${uid}`, {
+    headers: { Authorization: FOODY_API_TOKEN }
+  });
+  return res.data;
+}
+
 // ========== MAPEAMENTO DE STATUS ==========
-// Status do Foody → ação no Cardápio Web (Open Delivery)
 const STATUS_MAP = {
   'accepted':   'confirm',
   'collecting': 'readyForPickup',
   'ongoing':    'dispatch',
   'delivering': 'dispatch',
+  'dispatched': 'dispatch',
   'delivered':  'delivered',
   'cancelled':  'requestCancellation',
   'canceled':   'requestCancellation',
@@ -62,28 +76,16 @@ const STATUS_MAP = {
 app.post('/webhook/foody', async (req, res) => {
   console.log('\n📦 Webhook recebido do Foody:', JSON.stringify(req.body, null, 2));
 
-  // Responde 200 imediatamente para o Foody não desativar o webhook
+  // Responde 200 imediatamente
   res.status(200).json({ received: true });
 
   try {
     const body = req.body;
+    const uid = body.uid;
+    const foodyStatus = (body.status || '').toLowerCase();
 
-    // O Foody envia: uid (id da entrega), reference (id do pedido no cardápio), status, event
-    const orderId = body.reference || body.orderId || body.order_id || body.uid;
-    const foodyStatus = (body.status || body.eventType || body.event || '').toLowerCase();
-
-    console.log(`📋 orderId detectado: ${orderId}`);
-    console.log(`📋 status detectado: ${foodyStatus}`);
-
-    if (!orderId) {
-      console.log('⚠️ Evento sem orderId, ignorando.');
-      return;
-    }
-
-    if (!foodyStatus) {
-      console.log('⚠️ Evento sem status, ignorando.');
-      return;
-    }
+    if (!uid) { console.log('⚠️ Webhook sem uid, ignorando.'); return; }
+    if (!foodyStatus) { console.log('⚠️ Webhook sem status, ignorando.'); return; }
 
     const action = STATUS_MAP[foodyStatus];
     if (!action) {
@@ -91,46 +93,51 @@ app.post('/webhook/foody', async (req, res) => {
       return;
     }
 
-    console.log(`🔄 Pedido ${orderId} → Status Foody: "${foodyStatus}" → Ação Cardápio Web: "${action}"`);
+    // Busca pedido no Foody para pegar o displayId (ex: "11348")
+    console.log(`🔍 Buscando pedido no Foody: ${uid}`);
+    const foodyOrder = await getFoodyOrder(uid);
+    const foodyDisplayId = foodyOrder.id;
+    console.log(`📋 Foody displayId: ${foodyDisplayId}`);
+
+    // Busca o ID do Cardápio Web no mapa
+    const cardapioOrderId = orderMap[foodyDisplayId];
+    if (!cardapioOrderId) {
+      console.log(`⚠️ Pedido "${foodyDisplayId}" não mapeado. Mapa atual: ${JSON.stringify(orderMap)}`);
+      return;
+    }
+
+    console.log(`🔄 Foody #${foodyDisplayId} → Cardápio Web ${cardapioOrderId} → "${action}"`);
 
     const token = await getCardapioToken();
-    const url = `${CARDAPIO_BASE_URL}/v1/orders/${orderId}/${action}`;
+    const url = `${CARDAPIO_BASE_URL}/v1/orders/${cardapioOrderId}/${action}`;
 
     let payload = {};
-
     if (action === 'dispatch') {
       payload = {
         deliveryTrackingInfo: {
           courier: {
-            name: body.courier?.name || body.deliveryMan?.name || 'Entregador Foody',
-            phone: body.courier?.phone || body.deliveryMan?.phone || '',
+            name: foodyOrder.courier?.courierName || 'Entregador Foody',
+            phone: foodyOrder.courier?.courierPhone || '',
           }
         }
       };
     }
-
     if (action === 'requestCancellation') {
-      payload = {
-        cancellationCode: 'RESTAURANT_CANCELLED',
-        description: 'Cancelado via Foody Delivery'
-      };
+      payload = { cancellationCode: 'RESTAURANT_CANCELLED', description: 'Cancelado via Foody Delivery' };
     }
 
     await axios.post(url, payload, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      }
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
     });
 
-    console.log(`✅ Ação "${action}" enviada para Cardápio Web — Pedido ${orderId}`);
+    console.log(`✅ Ação "${action}" enviada para Cardápio Web — Pedido ${cardapioOrderId}`);
 
   } catch (err) {
     console.error('❌ Erro ao processar webhook:', err?.response?.data || err.message);
   }
 });
 
-// ========== POLLING — busca eventos do Cardápio Web ==========
+// ========== POLLING — busca eventos do Cardápio Web e mapeia pedidos ==========
 async function pollCardapioOrders() {
   try {
     const token = await getCardapioToken();
@@ -144,13 +151,30 @@ async function pollCardapioOrders() {
 
     for (const event of res.data) {
       console.log(`  → Evento: ${event.eventType} | Pedido: ${event.orderId}`);
+
+      // Quando chega pedido novo, busca detalhes para mapear com o Foody
+      if (event.eventType === 'CREATED' && event.orderId) {
+        try {
+          const orderRes = await axios.get(`${CARDAPIO_BASE_URL}/v1/orders/${event.orderId}`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          const order = orderRes.data;
+          const displayId = order.displayId; // ex: "11348"
+          if (displayId) {
+            orderMap[displayId] = event.orderId;
+            console.log(`🗺️ Mapeado: Foody #${displayId} → Cardápio Web ${event.orderId}`);
+          }
+        } catch (e) {
+          console.error('❌ Erro ao buscar detalhes do pedido:', e?.response?.data || e.message);
+        }
+      }
     }
 
-    // Confirma recebimento — formato correto: array direto
+    // Confirma recebimento — array direto
     const eventIds = res.data.map(e => e.eventId);
     await axios.post(
       `${CARDAPIO_BASE_URL}/v1/events/acknowledgment`,
-      eventIds,  // array direto, sem wrapper
+      eventIds,
       { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
     );
     console.log('✅ Eventos confirmados');
@@ -162,12 +186,18 @@ async function pollCardapioOrders() {
   }
 }
 
+// ========== VER MAPA DE PEDIDOS ==========
+app.get('/mapa', (req, res) => {
+  res.json({ orderMap, total: Object.keys(orderMap).length });
+});
+
 // ========== HEALTH CHECK ==========
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
     service: 'Integração Foody ↔ Cardápio Web',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    pedidosMapeados: Object.keys(orderMap).length
   });
 });
 
@@ -176,8 +206,6 @@ const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
   console.log(`📡 Webhook URL: /webhook/foody`);
-
-  // Polling a cada 30 segundos
   pollCardapioOrders();
   setInterval(pollCardapioOrders, 30000);
 });
