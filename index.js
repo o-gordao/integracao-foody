@@ -51,13 +51,15 @@ async function getCardapioToken() {
 
 // ========== MAPEAMENTO DE STATUS ==========
 const STATUS_MAP = {
-  'accepted':   'confirm',
-  'collecting': 'readyForPickup',
-  'ongoing':    'dispatch',
-  'delivering': 'dispatch',
-  'dispatched': 'dispatch',
-  'delivered':  'delivered',
-  'closed':     'delivered',   // pedido finalizado no Foody → concluído no Cardápio Web
+  'open':       'confirm',           // pedido aberto no Foody
+  'accepted':   'confirm',           // pedido aceito
+  'ready':      'readyForPickup',    // pedido pronto no Foody
+  'collecting': 'readyForPickup',    // entregador coletando
+  'dispatched': 'readyForPickup',    // despachado → pronto para retirada
+  'ongoing':    'dispatch',          // entregador saiu → despachar no Cardápio Web
+  'delivering': 'dispatch',          // em entrega
+  'delivered':  'delivered',         // entregue
+  'closed':     'delivered',         // finalizado no Foody → concluído no Cardápio Web
   'cancelled':  'requestCancellation',
   'canceled':   'requestCancellation',
 };
