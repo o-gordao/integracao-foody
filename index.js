@@ -57,6 +57,7 @@ const STATUS_MAP = {
   'delivering': 'dispatch',
   'dispatched': 'dispatch',
   'delivered':  'delivered',
+  'closed':     'delivered',   // pedido finalizado no Foody → concluído no Cardápio Web
   'cancelled':  'requestCancellation',
   'canceled':   'requestCancellation',
 };
