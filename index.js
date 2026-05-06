@@ -1,8 +1,34 @@
 const express = require('express');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 app.use(express.json());
+
+// ========== PERSISTÊNCIA DO MAPA EM DISCO ==========
+const MAP_FILE = path.join('/tmp', 'order_map.json');
+
+function salvarMapa() {
+  try {
+    fs.writeFileSync(MAP_FILE, JSON.stringify({ orderMap, foodyUidMap }, null, 2));
+  } catch(e) {
+    console.error('❌ Erro ao salvar mapa:', e.message);
+  }
+}
+
+function carregarMapa() {
+  try {
+    if (fs.existsSync(MAP_FILE)) {
+      const data = JSON.parse(fs.readFileSync(MAP_FILE, 'utf8'));
+      Object.assign(orderMap, data.orderMap || {});
+      Object.assign(foodyUidMap, data.foodyUidMap || {});
+      console.log(`📂 Mapa carregado: ${Object.keys(orderMap).length} pedidos`);
+    }
+  } catch(e) {
+    console.error('❌ Erro ao carregar mapa:', e.message);
+  }
+}
 
 // ========== CORS (permite acesso do painel HTML local) ==========
 app.use((req, res, next) => {
@@ -81,6 +107,7 @@ async function findCardapioOrderByDisplayId(displayId) {
         if (String(order.displayId) === String(displayId)) {
           // Encontrou! Salva no mapa
           orderMap[displayId] = event.orderId;
+          salvarMapa();
           console.log(`🔧 Remapeado: Foody #${displayId} → Cardápio Web ${event.orderId}`);
           return event.orderId;
         }
@@ -193,6 +220,7 @@ async function pollCardapioOrders() {
           const displayId = orderRes.data.displayId;
           if (displayId) {
             orderMap[displayId] = event.orderId;
+            salvarMapa();
             console.log(`🗺️ Mapeado: Foody #${displayId} → Cardápio Web ${event.orderId}`);
           }
         } catch (e) {
@@ -332,6 +360,7 @@ app.post('/mapear-uid', (req, res) => {
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor na porta ${PORT}`);
+  carregarMapa(); // restaura mapa salvo em disco
   pollCardapioOrders();
   setInterval(pollCardapioOrders, 30000);
 });
