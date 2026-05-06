@@ -123,9 +123,9 @@ async function findCardapioOrderByDisplayId(displayId) {
 const STATUS_MAP = {
   'open':       'confirm',
   'accepted':   'confirm',
-  'ready':      'readyForPickup',
-  'collecting': 'readyForPickup',
-  'dispatched': 'readyForPickup',
+  'ready':      'dispatch',      // para DELIVERY, pular readyForPickup e ir direto para dispatch
+  'collecting': 'dispatch',
+  'dispatched': 'dispatch',
   'ongoing':    'dispatch',
   'delivering': 'dispatch',
   'delivered':  'delivered',
@@ -246,7 +246,13 @@ async function pollCardapioOrders() {
 
   } catch (err) {
     if (err?.response?.status !== 204) {
-      console.error('❌ Erro no polling:', err?.response?.data || err.message);
+      const msg = err?.response?.data?.title || err?.response?.data || err.message || '';
+      console.error('❌ Erro no polling:', msg);
+      // Se rate limited, espera 2 minutos antes de tentar de novo
+      if (String(msg).toLowerCase().includes('retry')) {
+        console.log('⏳ Rate limited — aguardando 2 minutos...');
+        await new Promise(r => setTimeout(r, 120000));
+      }
     }
   }
 }
@@ -370,5 +376,5 @@ app.listen(PORT, () => {
   console.log(`🚀 Servidor na porta ${PORT}`);
   carregarMapa(); // restaura mapa salvo em disco
   pollCardapioOrders();
-  setInterval(pollCardapioOrders, 30000);
+  setInterval(pollCardapioOrders, 60000); // 60 segundos para evitar rate limit
 });
