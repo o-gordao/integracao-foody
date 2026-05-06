@@ -96,9 +96,10 @@ async function findCardapioOrderByDisplayId(displayId) {
     });
     if (!Array.isArray(res.data)) return null;
 
-    // Para cada evento CREATED, busca os detalhes do pedido
-    const createdEvents = res.data.filter(e => e.eventType === 'CREATED');
-    for (const event of createdEvents) {
+    // Para cada evento único de orderId, busca os detalhes do pedido
+    const orderIds = [...new Set(res.data.map(e => e.orderId).filter(Boolean))];
+    for (const orderId of orderIds) {
+      const event = { orderId };
       try {
         const orderRes = await axios.get(`${CARDAPIO_BASE_URL}/v1/orders/${event.orderId}`, {
           headers: { Authorization: `Bearer ${token}` }
@@ -106,10 +107,10 @@ async function findCardapioOrderByDisplayId(displayId) {
         const order = orderRes.data;
         if (String(order.displayId) === String(displayId)) {
           // Encontrou! Salva no mapa
-          orderMap[displayId] = event.orderId;
+          orderMap[displayId] = orderId;
           salvarMapa();
-          console.log(`🔧 Remapeado: Foody #${displayId} → Cardápio Web ${event.orderId}`);
-          return event.orderId;
+          console.log(`🔧 Remapeado: Foody #${displayId} → Cardápio Web ${orderId}`);
+          return orderId;
         }
       } catch {}
     }
