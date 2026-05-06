@@ -229,12 +229,20 @@ async function pollCardapioOrders() {
       }
     }
 
-    // Confirma eventos
-    const eventIds = res.data.map(e => ({ eventId: e.eventId }));
-    await axios.post(`${CARDAPIO_BASE_URL}/v1/events/acknowledgment`, eventIds, {
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-    });
-    console.log('✅ Eventos confirmados');
+    // Confirma eventos — tenta um por um para não travar em eventos não confirmaveis
+    let confirmados = 0;
+    for (const event of res.data) {
+      try {
+        await axios.post(`${CARDAPIO_BASE_URL}/v1/events/acknowledgment`,
+          [{ eventId: event.eventId }],
+          { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
+        );
+        confirmados++;
+      } catch(e) {
+        console.log(`⚠️ Evento ${event.eventId} (${event.eventType}) não pode ser confirmado, ignorando.`);
+      }
+    }
+    if (confirmados > 0) console.log(`✅ ${confirmados} evento(s) confirmados`);
 
   } catch (err) {
     if (err?.response?.status !== 204) {
