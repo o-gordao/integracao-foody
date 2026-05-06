@@ -400,5 +400,5 @@ app.listen(PORT, () => {
   console.log(`🚀 Servidor na porta ${PORT}`);
   carregarMapa(); // restaura mapa salvo em disco
   pollCardapioOrders();
-  setInterval(pollCardapioOrders, 60000); // 60 segundos para evitar rate limit
+  setInterval(pollCardapioOrders, 120000); // 2 minutos — polling é só backup agora
 });
