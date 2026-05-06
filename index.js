@@ -327,6 +327,30 @@ async function syncCouriers() {
   return synced;
 }
 
+// ========== PROXY FOODY API (evita CORS no navegador) ==========
+app.get('/foody/order/:uid', async (req, res) => {
+  try {
+    const r = await axios.get(`${FOODY_API_URL}/orders/${req.params.uid}`, {
+      headers: { Authorization: FOODY_API_TOKEN }
+    });
+    res.json(r.data);
+  } catch(e) {
+    res.status(e?.response?.status || 500).json(e?.response?.data || { error: e.message });
+  }
+});
+
+app.get('/foody/explore', async (req, res) => {
+  const path = req.query.path || '/orders';
+  try {
+    const r = await axios.get(`${FOODY_API_URL}${path}`, {
+      headers: { Authorization: FOODY_API_TOKEN }
+    });
+    res.json(r.data);
+  } catch(e) {
+    res.status(e?.response?.status || 500).json(e?.response?.data || { error: e.message });
+  }
+});
+
 // ========== ROTAS ==========
 app.get('/', (req, res) => res.json({
   status: 'online',
