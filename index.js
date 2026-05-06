@@ -25,6 +25,8 @@ const CARDAPIO_CLIENT_SECRET = '4a95ae0b-5bdb-40c2-bdb3-101bd22fe98b';
 // ========== MAPAS ==========
 // foodyDisplayId → cardapioOrderId   ex: "11348" → "214564677"
 const orderMap = {};
+// foodyDisplayId → foodyUid          ex: "11348" → "6c55676f-..."
+const foodyUidMap = {};
 // cardapioOrderId → dados do entregador do Foody
 const courierMap = {};
 
@@ -56,6 +58,38 @@ async function getCardapioToken() {
   cardapioTokenExpiry = Date.now() + (res.data.expires_in - 60) * 1000;
   console.log('✅ Token Cardápio Web renovado');
   return cardapioToken;
+}
+
+// ========== BUSCA PEDIDO NO CARDÁPIO WEB POR DISPLAY ID ==========
+async function findCardapioOrderByDisplayId(displayId) {
+  try {
+    const token = await getCardapioToken();
+    // Busca eventos recentes (até 100 eventos)
+    const res = await axios.get(`${CARDAPIO_BASE_URL}/v1/events:polling`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!Array.isArray(res.data)) return null;
+
+    // Para cada evento CREATED, busca os detalhes do pedido
+    const createdEvents = res.data.filter(e => e.eventType === 'CREATED');
+    for (const event of createdEvents) {
+      try {
+        const orderRes = await axios.get(`${CARDAPIO_BASE_URL}/v1/orders/${event.orderId}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const order = orderRes.data;
+        if (String(order.displayId) === String(displayId)) {
+          // Encontrou! Salva no mapa
+          orderMap[displayId] = event.orderId;
+          console.log(`🔧 Remapeado: Foody #${displayId} → Cardápio Web ${event.orderId}`);
+          return event.orderId;
+        }
+      } catch {}
+    }
+  } catch(e) {
+    console.error('❌ Erro ao buscar pedido no Cardápio Web:', e.message);
+  }
+  return null;
 }
 
 // ========== MAPEAMENTO DE STATUS ==========
@@ -92,6 +126,8 @@ app.post('/webhook/foody', async (req, res) => {
     });
     const foodyOrder = foodyRes.data;
     const foodyDisplayId = foodyOrder.id;
+    // Salva o uid para uso futuro
+    foodyUidMap[foodyDisplayId] = uid;
 
     // Salva dados do entregador no courierMap
     const cardapioOrderId = orderMap[foodyDisplayId];
@@ -179,6 +215,76 @@ async function pollCardapioOrders() {
   }
 }
 
+// ========== SYNC ENTREGADORES — busca todos pedidos do Foody ==========
+async function syncCouriers() {
+  console.log('\n🔄 Sincronizando entregadores...');
+  let synced = 0;
+
+  // Tenta buscar por UIDs já conhecidos
+  for (const [displayId, uid] of Object.entries(foodyUidMap)) {
+    try {
+      const res = await axios.get(`${FOODY_API_URL}/orders/${uid}`, {
+        headers: { Authorization: FOODY_API_TOKEN }
+      });
+      const foodyOrder = res.data;
+      const cardapioId = orderMap[displayId];
+      if (foodyOrder.courier && cardapioId) {
+        courierMap[cardapioId] = {
+          nome: foodyOrder.courier.courierName || '',
+          telefone: foodyOrder.courier.courierPhone || '',
+          tipo: foodyOrder.courier.courierType || '',
+          taxaEntregador: foodyOrder.courierFee || 0,
+          taxaCliente: foodyOrder.deliveryFee || 0,
+          despatchDate: foodyOrder.despatchDate || null,
+          foodyDisplayId: displayId,
+          foodyUid: uid,
+        };
+        synced++;
+        console.log(`  ✅ #${displayId} → ${foodyOrder.courier.courierName}`);
+      }
+    } catch(e) {
+      console.log(`  ⚠️ Falha ao buscar #${displayId}: ${e.message}`);
+    }
+  }
+
+  // Tenta buscar pedidos do Foody que ainda não temos uid (tenta lista por data)
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const res = await axios.get(`${FOODY_API_URL}/orders`, {
+      headers: { Authorization: FOODY_API_TOKEN },
+      params: { date: today }
+    });
+    if (Array.isArray(res.data)) {
+      for (const fo of res.data) {
+        const displayId = fo.id;
+        const uid = fo.uid;
+        if (displayId && uid) {
+          foodyUidMap[displayId] = uid;
+          const cardapioId = orderMap[displayId];
+          if (fo.courier && cardapioId) {
+            courierMap[cardapioId] = {
+              nome: fo.courier.courierName || '',
+              telefone: fo.courier.courierPhone || '',
+              tipo: fo.courier.courierType || '',
+              taxaEntregador: fo.courierFee || 0,
+              taxaCliente: fo.deliveryFee || 0,
+              despatchDate: fo.despatchDate || null,
+              foodyDisplayId: displayId,
+              foodyUid: uid,
+            };
+            synced++;
+          }
+        }
+      }
+    }
+  } catch(e) {
+    console.log('  ℹ️ Endpoint de lista do Foody não disponível:', e.message);
+  }
+
+  console.log(`✅ Sync concluído: ${synced} entregador(es) atualizados`);
+  return synced;
+}
+
 // ========== ROTAS ==========
 app.get('/', (req, res) => res.json({
   status: 'online',
@@ -198,6 +304,28 @@ app.get('/pedido/:cardapioId', (req, res) => {
   const id = req.params.cardapioId;
   const courier = courierMap[id] || null;
   res.json({ cardapioOrderId: id, courier });
+});
+
+// Retorna mapa de uids do Foody
+app.get('/foody-uids', (req, res) => res.json({ foodyUidMap }));
+
+// Força sincronização dos entregadores
+app.get('/sync', async (req, res) => {
+  try {
+    const synced = await syncCouriers();
+    res.json({ ok: true, synced, courierMap });
+  } catch(e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Recebe uid do Foody manualmente para mapear
+app.post('/mapear-uid', (req, res) => {
+  const { foodyDisplayId, foodyUid } = req.body;
+  if (!foodyDisplayId || !foodyUid) return res.status(400).json({ error: 'foodyDisplayId e foodyUid são obrigatórios' });
+  foodyUidMap[foodyDisplayId] = foodyUid;
+  console.log(`🗺️ UID mapeado manualmente: Foody #${foodyDisplayId} → ${foodyUid}`);
+  res.json({ ok: true, foodyDisplayId, foodyUid });
 });
 
 // ========== START ==========
