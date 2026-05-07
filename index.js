@@ -25,7 +25,7 @@ const foodyUidMap = {}; // foodyDisplayId → foodyUid
 const courierMap  = {}; // cardapioOrderId → entregador
 
 function salvarMapa() {
-  try { fs.writeFileSync(MAP_FILE, JSON.stringify({ orderMap, foodyUidMap }, null, 2)); } catch(e) {}
+  try { fs.writeFileSync(MAP_FILE, JSON.stringify({ orderMap, foodyUidMap, courierMap }, null, 2)); } catch(e) {}
 }
 function carregarMapa() {
   try {
@@ -33,7 +33,8 @@ function carregarMapa() {
       const d = JSON.parse(fs.readFileSync(MAP_FILE, 'utf8'));
       Object.assign(orderMap, d.orderMap || {});
       Object.assign(foodyUidMap, d.foodyUidMap || {});
-      console.log(`📂 Mapa carregado: ${Object.keys(orderMap).length} pedidos`);
+      Object.assign(courierMap, d.courierMap || {});
+      console.log(`📂 Mapa carregado: ${Object.keys(orderMap).length} pedidos | ${Object.keys(courierMap).length} entregadores`);
     }
   } catch(e) {}
 }
