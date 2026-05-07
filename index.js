@@ -328,43 +328,15 @@ async function syncCouriers() {
   return synced;
 }
 
-// ========== WEBHOOK — recebe eventos do CARDÁPIO WEB ==========
-app.post('/webhook/cardapio', async (req, res) => {
-  console.log('\n🛒 Webhook Cardápio Web:', JSON.stringify(req.body, null, 2));
+// ========== WEBHOOK — recebe eventos do CARDÁPIO WEB (só loga) ==========
+app.post('/webhook/cardapio', (req, res) => {
+  console.log('\n🛒 Webhook Cardápio Web recebido!');
+  console.log('  eventType:', req.body.eventType || '?');
+  console.log('  orderId:', req.body.orderId || '?');
+  console.log('  orderURL:', req.body.orderURL || '?');
+  console.log('  createdAt:', req.body.createdAt || '?');
+  console.log('  Body completo:', JSON.stringify(req.body, null, 2));
   res.status(200).json({ received: true });
-
-  try {
-    const body = req.body;
-
-    // O Cardápio Web envia: orderId, eventType, orderURL, createdAt
-    const orderId = body.orderId;
-    const eventType = body.eventType || body.event;
-    const orderURL = body.orderURL;
-
-    if (!orderId) { console.log('⚠️ Webhook sem orderId, ignorando.'); return; }
-
-    console.log(`📋 Evento: ${eventType} | Pedido Cardápio Web: ${orderId}`);
-
-    // Só processa quando o pedido é CRIADO
-    if (eventType === 'CREATED' || eventType === 'ORDER_CREATED' || eventType === 'order_created') {
-      // Busca detalhes do pedido para pegar o displayId
-      const token = await getCardapioToken();
-      const url = orderURL || `${CARDAPIO_BASE_URL}/v1/orders/${orderId}`;
-      const res2 = await axios.get(url, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const order = res2.data;
-      const displayId = String(order.displayId || '');
-
-      if (displayId) {
-        orderMap[displayId] = orderId;
-        salvarMapa();
-        console.log(`✅ Mapeado via webhook Cardápio Web: #${displayId} → ${orderId}`);
-      }
-    }
-  } catch(e) {
-    console.error('❌ Erro webhook Cardápio Web:', e?.response?.data || e.message);
-  }
 });
 
 // ========== PROXY FOODY API (evita CORS no navegador) ==========
