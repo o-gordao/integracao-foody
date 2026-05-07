@@ -65,6 +65,10 @@ async function polling() {
   } catch(err) {
     const msg = err?.response?.data?.title || err?.response?.data || err.message || '';
     console.error(`[${new Date().toLocaleTimeString('pt-BR')}] ❌ Erro: ${msg}`);
+    if (String(msg).toLowerCase().includes('retry')) {
+      console.log('⏳ Rate limit — aguardando 60s...');
+      await new Promise(r => setTimeout(r, 60000));
+    }
   }
 }
 
@@ -90,5 +94,5 @@ app.listen(PORT, () => {
   console.log(`🚀 Servidor na porta ${PORT}`);
   console.log(`⏱️ Polling a cada 15 segundos`);
   polling();
-  setInterval(polling, 15000);
+  setInterval(polling, 30000); // 30 segundos
 });
