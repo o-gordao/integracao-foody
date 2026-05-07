@@ -237,7 +237,7 @@ app.get('/eventos', (req, res) => {
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor na porta ${PORT}`);
-  console.log(`⏱️ Polling a cada 15 segundos`);
+  console.log(`⏱️ Polling a cada 1 minuto`);
   carregarMapa();
   polling();
   setInterval(polling, 60000); // 1 minuto
