@@ -1,51 +1,94 @@
 const express = require('express');
+const axios = require('axios');
+
 const app = express();
 app.use(express.json());
 
-// CORS
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  next();
-});
+// ========== CONFIGURAÇÕES ==========
+const CARDAPIO_BASE_URL      = 'https://integracao.cardapioweb.com/api/open_delivery';
+const CARDAPIO_CLIENT_ID     = 'ec2b9f5d-3313-49a7-ac0d-d688f49ab684';
+const CARDAPIO_CLIENT_SECRET = '4a95ae0b-5bdb-40c2-bdb3-101bd22fe98b';
 
-// Armazena eventos recebidos em memória
+// ========== TOKEN ==========
+let token = null, tokenExpiry = null;
+
+async function getToken() {
+  if (token && Date.now() < tokenExpiry) return token;
+  const p = new URLSearchParams();
+  p.append('grant_type', 'client_credentials');
+  p.append('client_id', CARDAPIO_CLIENT_ID);
+  p.append('client_secret', CARDAPIO_CLIENT_SECRET);
+  const res = await axios.post(`${CARDAPIO_BASE_URL}/oauth/token`, p);
+  token = res.data.access_token;
+  tokenExpiry = Date.now() + (res.data.expires_in - 60) * 1000;
+  console.log('✅ Token renovado');
+  return token;
+}
+
+// ========== ARMAZENA EVENTOS ==========
 const eventos = [];
 
-// ========== WEBHOOK DO CARDÁPIO WEB ==========
-app.post('/webhook/cardapio', (req, res) => {
-  const evento = {
-    recebidoEm: new Date().toISOString(),
-    ...req.body
-  };
+// ========== POLLING ==========
+async function polling() {
+  try {
+    const t = await getToken();
+    const res = await axios.get(`${CARDAPIO_BASE_URL}/v1/events:polling`, {
+      headers: { Authorization: `Bearer ${t}` }
+    });
 
-  eventos.unshift(evento); // mais recente primeiro
-  if (eventos.length > 200) eventos.pop(); // guarda os últimos 200
+    if (res.status === 204 || !res.data?.length) {
+      console.log(`[${new Date().toLocaleTimeString('pt-BR')}] 📭 Sem eventos novos`);
+      return;
+    }
 
-  console.log('\n🛒 Cardápio Web →', evento.eventType, '| Pedido:', evento.orderId);
-  console.log(JSON.stringify(evento, null, 2));
+    console.log(`\n[${new Date().toLocaleTimeString('pt-BR')}] 🔔 ${res.data.length} evento(s):`);
 
-  res.status(200).json({ received: true });
-});
+    for (const ev of res.data) {
+      console.log(`  → ${ev.eventType} | Pedido: ${ev.orderId} | ${ev.createdAt}`);
+      eventos.unshift({ recebidoEm: new Date().toISOString(), ...ev });
+      if (eventos.length > 200) eventos.pop();
+    }
 
-// ========== VER EVENTOS RECEBIDOS ==========
+    // Confirma eventos
+    let ok = 0;
+    for (const ev of res.data) {
+      try {
+        await axios.post(`${CARDAPIO_BASE_URL}/v1/events/acknowledgment`,
+          [{ eventId: ev.eventId }],
+          { headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' } }
+        );
+        ok++;
+      } catch(e) {}
+    }
+    if (ok > 0) console.log(`  ✅ ${ok} confirmado(s)`);
+
+  } catch(err) {
+    const msg = err?.response?.data?.title || err?.response?.data || err.message || '';
+    console.error(`[${new Date().toLocaleTimeString('pt-BR')}] ❌ Erro: ${msg}`);
+  }
+}
+
+// ========== ROTAS ==========
+app.get('/', (req, res) => res.json({
+  status: 'online',
+  servico: 'Polling Cardápio Web',
+  totalEventos: eventos.length,
+  ultimoEvento: eventos[0] || null,
+  timestamp: new Date().toISOString()
+}));
+
 app.get('/eventos', (req, res) => {
-  res.json({ total: eventos.length, eventos });
+  const tipo = req.query.tipo;
+  const limit = parseInt(req.query.limit) || 100;
+  const filtrados = tipo ? eventos.filter(e => e.eventType === tipo) : eventos;
+  res.json({ total: filtrados.length, eventos: filtrados.slice(0, limit) });
 });
 
-// ========== HEALTH CHECK ==========
-app.get('/', (req, res) => {
-  res.json({
-    status: 'online',
-    servico: 'Receptor Cardápio Web',
-    totalEventos: eventos.length,
-    ultimoEvento: eventos[0] || null,
-    timestamp: new Date().toISOString()
-  });
-});
-
+// ========== START ==========
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor na porta ${PORT}`);
-  console.log(`📡 Aguardando webhooks em /webhook/cardapio`);
+  console.log(`⏱️ Polling a cada 15 segundos`);
+  polling();
+  setInterval(polling, 15000);
 });
